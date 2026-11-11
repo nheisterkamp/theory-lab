@@ -355,7 +355,7 @@ static int idle_leds(void)
 {
     int due = (ui_idle & 1u) && !(ui_prefs & PREF_ANIM_OFF) && !song.playing && !seq_counting() && !chain_busy() &&
               !song.rec && !transport_req && !ui.layer && !ui.lock && !ui.menu && !ui.confirm && !ui.uboot && !name_on() &&
-              !(fm1_in.notes | fm1_in.buttons) && !panel_moved && !play_leds() && fm1_ms - scrn.idle >= IDLE_LEDS_MS;
+              !theory_active && !(fm1_in.notes | fm1_in.buttons) && !panel_moved && !play_leds() && fm1_ms - scrn.idle >= IDLE_LEDS_MS;
     if (!due) {
         if (fm1_led_idle_on())
             fm1_led_anim_stop();
@@ -414,6 +414,33 @@ static void ui_leds(void)
     if (!ready) {
         led_pos_init();
         ready = 1;
+    }
+    if (theory_active) {
+        uint32_t guide, alternate;
+        theory_backing_poll();
+        theory_lab_poll(theory_keys);
+        theory_lab_guides(&sc, &sr, &guide, &alternate);
+        sr |= alternate;
+        c = fm1_in.notes | guide;
+        for (k = 0; k < 27u; k++) {
+            led_put(nl, 14u + k, (int)((c >> k) & 1u));
+            led_put(nm, 14u + k, (int)((sr >> k) & 1u));
+            led_put(nd, 14u + k, (int)((sc >> k) & 1u));
+        }
+        led_put(nl, panel.btn[B_HOME], 1);
+        led_put(nl, panel.btn[B_SCL], 1);
+        if (theory_lab.page == TH_EAR || theory_lab.page == TH_RIFF || theory_lab.page == TH_MISSION)
+            led_put(nl, panel.btn[B_REC], 1);
+        if (song.playing || theory_preview_request)
+            nl[LED_PLAY_GREEN >> 3] |= (uint8_t)(1u << (LED_PLAY_GREEN & 7u));
+        fm1_led_dim_level(0);
+        for (k = 0; k < FM1_NCOL; k++) {
+            fm1_led_dim[k] = nd[k];
+            fm1_led_mid[k] = nm[k];
+            fm1_led_breath[k] = 0;
+            fm1_led[k] = nl[k];
+        }
+        return;
     }
     if (!ui.layer || FAM_BTN[fam] != layer_btn())
         led_put(nl, panel.btn[FAM_BTN[fam]], 1);
@@ -1508,6 +1535,92 @@ static void ui_notices(void)
     }
 }
 
+static int theory_poly(uint32_t track)
+{
+    return !chord_kit(&trk[track]) && trk_vmode(&trk[track]) == V_POLY && !trk[track].p[P_MUTE];
+}
+
+static uint32_t theory_practice_track(void)
+{
+    uint32_t track;
+    if (song.sel + 1u != theory_ui.track && theory_poly(song.sel))
+        return song.sel;
+    for (track = 0; track < NTRK; track++)
+        if (track + 1u != theory_ui.track && theory_poly(track))
+            return track;
+    if (theory_ui.track && theory_poly(theory_ui.track - 1u))
+        return theory_ui.track - 1u;
+    return NTRK;
+}
+
+/* Hold HOME and tap ARP to enter Theory without cycling the Home or ARP pages. */
+static int theory_input(uint32_t pressed)
+{
+    uint32_t home = 1u << panel.btn[B_HOME], arp = 1u << panel.btn[B_ARP];
+    int32_t key, mode, backing, page;
+    uint32_t track;
+    if (!theory_active) {
+        if (!(pressed & arp) || !(fm1_in.buttons & home) || ui.menu || ui.confirm ||
+            ui.ly || ui.layer || ui.uboot || name_on())
+            return 0;
+        ui.home_t0 = 0;
+        ui.pg_down &= (uint16_t)~arp;
+        track = theory_practice_track();
+        if (track == NTRK)
+            ui_message("CHOOSE A POLY SYNTH");
+        else if (fm1_in.notes)
+            ui_message("RELEASE THE KEYS");
+        else {
+            kb_mask = 0;
+            perf_mask = 0;
+            kb_lock = 0;
+            theory_track = (uint8_t)track;
+            theory_ui.backing = 0;
+            theory_active = 1;
+            ui.force = 1;
+        }
+        return 1;
+    }
+    if ((pressed & home) || ui.uboot) {
+        theory_lab_leave();
+        theory_active = 0;
+        ui.force = 1;
+        layer_masks();
+        return 1;
+    }
+    key = panel_enc(EN_K1);
+    mode = panel_enc(EN_K2);
+    backing = panel_enc(EN_K3);
+    page = panel_enc(EN_K4);
+    panel_enc(EN_SELECT);
+    panel_enc(EN_ALGO);
+    panel_enc(EN_PRESET);
+    if (page)
+        theory_lab_page(page);
+    pressed &= ~theory_lab_input(pressed, &key, &mode);
+    if (backing) {
+        int32_t n = (int32_t)NTRK + 1;
+        theory_ui.track = (uint8_t)((theory_ui.track + backing % n + n) % n);
+        theory_ui.backing = 0;
+        theory_lab.mission.pending = theory_lab.mission.chord = 0;
+        track = theory_practice_track();
+        if (track < NTRK)
+            theory_track = (uint8_t)track;
+    }
+    if (pressed & (1u << panel.btn[B_PLAY]))
+        transport_req = song.playing || chain_busy() || seq_counting() ? 2 : 1;
+    theory_ui.fifth = (uint8_t)((theory_ui.fifth + key % 12 + 12) % 12);
+    if (mode)
+        theory_set_mode(mode);
+    if (pressed & (1u << panel.btn[B_SCL]))
+        theory_ui.wheel ^= 1u;
+    if (pressed & (1u << panel.btn[B_OCTDN]))
+        theory_octave = (int8_t)clamp(theory_octave - 1, -3, 3);
+    if (pressed & (1u << panel.btn[B_OCTUP]))
+        theory_octave = (int8_t)clamp(theory_octave + 1, -3, 3);
+    return 1;
+}
+
 static void ui_input(void)
 {
     uint32_t pressed = fm1_input_edges(0), notes = fm1_input_note_edges(), now = fm1_ticks(), id, b, k;
@@ -1535,6 +1648,8 @@ static void ui_input(void)
     follow_poll();                                      /* (1.6, #242: SEQ's roll follows the play position) */
     if (scr_input(pressed, notes))                      /* MENU > SCREEN OFF: dark, or the wake gesture: swallowed */
         return;                                         /* (before the buttons' timers: no tap or hold after it) */
+    if (theory_input(pressed))
+        return;
     if (mom.n && !mom_down()) {                         /* MOMENTARY: LFO let go (or the menu, a layer ..): back */
         mom_restore();
         ui_message("BACK");

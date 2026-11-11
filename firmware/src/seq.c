@@ -34,6 +34,15 @@ static const uint16_t SCALE_MASK[] = {
 
 #define KB_SILENT 255u
 static uint32_t kb_prev;
+static volatile uint8_t theory_active;
+static volatile int8_t theory_octave;
+static uint8_t theory_track;
+/* Each preview byte is MIDI note + 1. The UI publishes a whole chord in one
+ * store; the audio callback owns its note-ons and releases. */
+static volatile uint32_t theory_preview_request;
+static uint32_t theory_preview_playing;
+static uint8_t theory_preview_track;
+static volatile uint32_t theory_keys;   /* keys started in Theory, retained until their own release */
 static volatile uint8_t kb_boot_hold;    /* #137: set from power-on to the end of the splash (main.c): the keys sound nothing,
                                           * and one held across its end stays silent until it is let go and pressed again */
 static uint8_t kb_note[27], kb_trk[27];  /* per key: the note it started and on which track */
@@ -755,18 +764,62 @@ static __attribute__((noinline)) void perf_key_remap(void)
     }
 }
 
-/* key k plays kb_note[k] on track t: its chord (chord.c; the note alone with CHRD OFF). A note another key
- * holds already sounds: it is not started again (nor sent to MIDI OUT); the key keeps its notes */
-static void key_on(uint32_t k, track_t *t)
+static int theory_preview_has(uint32_t notes, uint32_t note)
 {
-    uint32_t n = chord_build(t, kb_note[k], kb_chord[k]), i, mc = trk_midi_ch(trk_index(t)), vel = kb_vel;
+    for (; notes; notes >>= 8)
+        if ((notes & 255u) == note + 1u)
+            return 1;
+    return 0;
+}
+
+static __attribute__((noinline)) void theory_preview_block(void)
+{
+    uint32_t want = theory_active ? theory_preview_request : 0;
+    uint32_t previous = theory_preview_playing, same = theory_preview_track == theory_track;
+    uint32_t notes, note;
+    track_t *old_track = &trk[theory_preview_track];
+    track_t *new_track = &trk[theory_track];
+    if (same && want == previous)
+        return;
+    for (notes = previous; notes; notes >>= 8) {
+        note = (notes & 255u) - 1u;
+        if ((!same || !theory_preview_has(want, note)) &&
+            !midi_local_held(old_track, note) && !midi_note_held(old_track, note))
+            trk_note_off(old_track, note);
+    }
+    for (notes = want; notes; notes >>= 8) {
+        note = (notes & 255u) - 1u;
+        if ((!same || !theory_preview_has(previous, note)) &&
+            !midi_local_held(new_track, note) && !midi_note_held(new_track, note))
+            trk_note_on(new_track, note, 96);
+    }
+    theory_preview_playing = want;
+    theory_preview_track = theory_track;
+}
+
+/* key k plays kb_note[k] on track t: its chord (chord.c; the note alone with CHRD OFF). A note another key
+ * holds already sounds: it is not started again (nor sent to MIDI OUT); the key keeps its notes.
+ * Keep the event-only work out of the audio callback's key scan. */
+static __attribute__((noinline)) void key_on(uint32_t k, track_t *t)
+{
+    uint32_t practice = (theory_keys >> k) & 1u;
+    uint32_t n = 1, i, mc = trk_midi_ch(trk_index(t)), vel = kb_vel;
+    if (practice)
+        kb_chord[k][0] = kb_note[k];
+    else
+        n = chord_build(t, kb_note[k], kb_chord[k]);
     kb_chn[k] = 0;
     in_key = (uint8_t)(k + 1u);                     /* (the arp keeps the key: arp_add) */
     for (i = 0; i < n; i++) {
         uint32_t x = kb_chord[k][i];
         if (midi_local_held(t, x))
             continue;
-        input_on(t, x, vel);
+        if (practice) {
+            if (trk_index(t) != theory_preview_track || !theory_preview_has(theory_preview_playing, x))
+                trk_note_on(t, x, vel);
+        } else {
+            input_on(t, x, vel);
+        }
         midi_out_event(0x09u | (0x90u | mc) << 8 | x << 16 | vel << 24);
     }
     in_key = 0;
@@ -775,15 +828,21 @@ static void key_on(uint32_t k, track_t *t)
 }
 
 /* key k is up: the notes it started end, but those another key still holds */
-static void key_off(uint32_t k, track_t *t)
+static __attribute__((noinline)) void key_off(uint32_t k, track_t *t)
 {
     uint32_t n = kb_chn[k], i, mc = trk_midi_ch(trk_index(t));
+    uint32_t practice = (theory_keys >> k) & 1u;
+    theory_keys &= ~(1u << k);
     kb_chn[k] = 0;
     for (i = 0; i < n; i++) {
         uint32_t x = kb_chord[k][i];
         if (midi_local_held(t, x))
             continue;
-        input_off(t, x);
+        if (!practice)
+            input_off(t, x);
+        else if (!midi_note_held(t, x) &&
+                 (trk_index(t) != theory_preview_track || !theory_preview_has(theory_preview_playing, x)))
+            trk_note_off(t, x);
         midi_out_event(0x08u | (0x80u | mc) << 8 | x << 16);
     }
 }
@@ -829,7 +888,7 @@ static void keyboard_block(void)
         if (!((ch >> k) & 1u))
             continue;
         if ((cur >> k) & 1u) {                    /* the selected track; the key-up goes to the same one */
-            kb_trk[k] = song.sel;
+            kb_trk[k] = theory_active ? theory_track : song.sel;
             if (kb_asleep) {                      /* (SCREEN OFF: the wake press is swallowed) */
                 kb_note[k] = KB_SILENT;
                 continue;
@@ -841,7 +900,10 @@ static void keyboard_block(void)
                     perf_key_press(k, 1);
                 continue;
             }
-            if ((mute >> k) & 1u)                 /* NAME (ui_name.c): every key types, none sounds; SONG: A..D */
+            if (theory_active) {
+                theory_keys |= 1u << k;
+                kb_note[k] = (uint8_t)(53 + (int32_t)k + 12 * theory_octave);
+            } else if ((mute >> k) & 1u)                 /* NAME (ui_name.c): every key types, none sounds; SONG: A..D */
                 kb_note[k] = KB_SILENT;
             else if (song.grid == 1u)             /* the DRUM grid: a lane key plays its lane, the rest are the UI's */
                 kb_note[k] = grid_key_note(k);
@@ -1476,6 +1538,8 @@ static void events_block(uint32_t n)
                 seq_n = midi_clock_advance(fm1_ms);
         }
     }
+    if (theory_preview_request || theory_preview_playing)
+        theory_preview_block();
     if (aud_req)
         seq_audition();                               /* (STEP PREVIEW: a step sounds, stopped) */
     chain_tick(clock_mode && chain.running ? midi_seq_preview(&trk[chain.clk], seq_n) : seq_n);

@@ -1605,6 +1605,8 @@ static void style_apply(void)
     }
 }
 
+#include "ui_theory.c"
+
 static void ui_draw_page(uint32_t counting);
 static void ui_draw(void)
 {
@@ -1622,6 +1624,10 @@ static void ui_draw(void)
 }
 static void ui_draw_page(uint32_t counting)
 {
+    if (theory_active && !ui.uboot) {
+        theory_draw();
+        return;
+    }
     if (ui.uboot) {
         draw_uboot();
         draw_head();
