@@ -1,15 +1,15 @@
-# Chord Compass
+# Theory Lab
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
-Chord Compass turns the **M-VAVE FM-1** into a hands-on music theory companion.
+Theory Lab turns the **M-VAVE FM-1** into a hands-on music theory companion.
 Play notes and chords, explore scales and the circle of fifths, follow a backing
 progression, and practice with five interactive lessons.
 
 Built on [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita and
 Hügelton Instruments, with the original attribution and GPL-3.0-only licence.
 
-![Chord Compass on the FM-1 display](docs/chord-compass.png)
+![Theory Lab on the FM-1 display](docs/theory-lab.png)
 
 The firmware, lessons and update package have been checked in the host simulator.
 Physical FM-1 testing is still pending.
@@ -18,7 +18,7 @@ The FM-1 is the only supported hardware target. This project does not provide, m
 
 ## Install
 
-Build Chord Compass with the toolchain described in [BUILDING.md](BUILDING.md):
+Build Theory Lab with the toolchain described in [BUILDING.md](BUILDING.md):
 
 ```sh
 ./build.sh --release 1.8.1-theorylab
@@ -27,8 +27,8 @@ Build Chord Compass with the toolchain described in [BUILDING.md](BUILDING.md):
 The installable package is `build/felucca-1.8.1-theorylab.fwsc`. Follow the local
 installer instructions in BUILDING.md to load your own package.
 
-The base is Felucca 1.8.1. Newer FM-1 units using the UC25HQ80 flash chip require
-the compatibility work described in Felucca's [issue #320](https://github.com/hugelton/Felucca/issues/320).
+The firmware recognizes both the original Puya flash (`0x856014`) and the newer
+UC25HQ80 flash (`0xB36014`). Physical validation of this build is still pending.
 
 ## Theory practice
 
