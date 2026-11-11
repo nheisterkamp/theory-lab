@@ -1703,6 +1703,14 @@ async function updater() {
   ok(got === "FM-1_900" && dev.bad === 0 && steps.includes("write") && steps.at(-1) === "done",
     `fm1ota.js: install: running firmware -> loader -> Felucca (${dev.served} reads)`);
 
+  for (const name of ["Hortator", "Mutable Dreams FM-1"]) {
+    const custom = new FakeFM1(image);
+    custom.boot("FM-1_710010400", name);
+    const found = await new Updater(custom.access).find();
+    ok(found?.id.text === "FM-1_710010400", `fm1ota.js: discover FM-1 custom firmware port ${name}`);
+    found?.link.close();
+  }
+
   const dev2 = new FakeFM1(image, { unplugAfter: 3 });
   dev2.boot("ota-FM-1_900", "Felucca Update");
   const t0 = Date.now();
