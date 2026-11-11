@@ -22,6 +22,15 @@ static struct {
     uint16_t backing;
 } theory_ui;
 
+enum { TH_APP_EXPLORE, TH_APP_BACKING, TH_APP_GPS, TH_APP_EAR, TH_APP_RIFF,
+       TH_APP_PASS, TH_APP_MISSION, TH_APP_GUITAR, TH_APP_SOUNDS, TH_APP_ADVANCED, TH_APP_SETTINGS, TH_APP_ITEMS };
+static struct {
+    uint8_t primary, menu, selected, sounds, sound, sound_cursor, backing, progression, loaded, guitar;
+    uint16_t progress_px, riff_px;
+    int16_t nav, nav_from, nav_target;
+    uint32_t audition_at, nav_at;
+} theory_app;
+
 #define TH_BG RGB(17, 23, 45)
 #define TH_SURF RGB(34, 44, 75)
 #define TH_RULE RGB(64, 77, 116)
@@ -242,7 +251,8 @@ static void theory_key_name(char out[24])
 {
     theory_note(out, theory_root());
     theory_append(out, " ", 24);
-    theory_append(out, THEORY_MODE[theory_ui.mode].name, 24);
+    theory_append(out, theory_app.primary && theory_ui.mode == 0u ? "Major" :
+                      theory_app.primary && theory_ui.mode == 5u ? "Minor" : THEORY_MODE[theory_ui.mode].name, 24);
 }
 
 static void theory_heading(const char *title, const char *detail)
@@ -262,7 +272,7 @@ static void theory_live_top(uint32_t held)
     uint16_t accent = TH_PLAY;
     theory_key_name(key);
     cv_begin(240, 120, TH_BG);
-    theory_heading("Theory", key);
+    theory_heading(theory_app.primary ? "Explore" : "Theory", key);
     for (k = 0; k < 27u; k++) {
         uint32_t pitch;
         if (!(held & TH_NOTE(k)))
@@ -414,6 +424,96 @@ static void theory_degrees(void)
     }
 }
 
+static const struct { const char *first, *second; } THEORY_RECIPE[12] = {
+    {"Root", ""}, {"Minor", "second"}, {"Major", "second"}, {"Minor", "third"},
+    {"Major", "third"}, {"Perfect", "fourth"}, {"Diminished", "fifth"}, {"Perfect", "fifth"},
+    {"Minor", "sixth"}, {"Major", "sixth"}, {"Minor", "seventh"}, {"Major", "seventh"},
+};
+
+static void theory_recipe(uint32_t held)
+{
+    uint32_t pitches = 0, bass = 128, root, count = 0, k, i, column = 0;
+    int32_t chord;
+    for (k = 0; k < 27u; k++)
+        if (held & TH_NOTE(k)) {
+            uint32_t note = kb_note[k];
+            pitches |= TH_NOTE(note % 12u);
+            if (note < bass)
+                bass = note;
+        }
+    root = bass % 12u;
+    chord = theory_match(pitches, root, &root);
+    for (i = 0; i < 12u; i++)
+        count += (pitches >> i) & 1u;
+    if (!count) {
+        cv_text(12, 60, &AF_S, !theory_root() && !theory_ui.mode ?
+                "Try C + E + G. Then lower E to Eb." : "Play a chord. See each note's role.", TH_MUTED);
+        theory_degrees();
+        return;
+    }
+    if (count == 1u) {
+        char degree[24] = "Degree ", relation[40] = "";
+        uint32_t iv = theory_interval(root);
+        uint32_t inside = theory_mask() & TH_NOTE(iv);
+        if (inside)
+            fmt_int(degree + str_len(degree), (int32_t)theory_degree(iv) + 1);
+        else
+            str_cpy(degree, "Outside scale", sizeof degree);
+        theory_append(relation, THEORY_RECIPE[iv].first, sizeof relation);
+        if (THEORY_RECIPE[iv].second[0]) {
+            theory_append(relation, " ", sizeof relation);
+            theory_append(relation, THEORY_RECIPE[iv].second, sizeof relation);
+        }
+        theory_append(relation, iv ? " above tonic" : " note", sizeof relation);
+        cv_rect(12, 59, 216, 40, TH_SURF);
+        cv_text_on(20, 59, &AF_M, degree, inside ? TH_PLAY : TH_OUT, TH_SURF);
+        cv_text_on(20, 82, &AF_S, relation, TH_MUTED, TH_SURF);
+        return;
+    }
+    if (count > 4u)
+        count = 4u;
+    for (i = 0; i < 12u && column < count; i++) {
+        uint32_t pc = (root + i) % 12u;
+        int32_t x = 12 + (int32_t)(216u * column / count);
+        int32_t w = (int32_t)(216u / count) - 3;
+        uint16_t fg = i == 0 ? TH_PLAY : TH_TEXT;
+        char note[4];
+        const char *first = THEORY_RECIPE[i].first, *second = THEORY_RECIPE[i].second;
+        if (!(pitches & TH_NOTE(pc)))
+            continue;
+        if (chord >= 0) {
+            theory_chord_note(note, pc, root, (uint32_t)chord);
+            if (i == 2u && (THEORY_CHORD[chord].mask & (TH_NOTE(3) | TH_NOTE(4)))) {
+                first = "Added";
+                second = "ninth";
+            } else if (i == 8u && (THEORY_CHORD[chord].mask & TH_NOTE(4))) {
+                first = "Augmented";
+                second = "fifth";
+            } else if (i == 9u && THEORY_CHORD[chord].mask == TH_SEVENTH(3,6,9)) {
+                first = "Diminished";
+                second = "seventh";
+            }
+        } else {
+            theory_note(note, pc);
+            if (!i)
+                first = "Bass";
+            else if (i == 6u) {
+                first = "Tritone";
+                second = "";
+            }
+        }
+        if (w < 60 && first[0] == 'D')
+            first = "Dim.";
+        if (w < 60 && first[0] == 'A')
+            first = "Aug.";
+        cv_rect(x, 59, w, 40, TH_SURF);
+        cv_text_in(x, 58, w, &AF_S, note, fg, TH_SURF);
+        cv_text_in(x, 73, w, &AF_S, first, TH_MUTED, TH_SURF);
+        cv_text_in(x, 85, w, &AF_S, second, TH_MUTED, TH_SURF);
+        column++;
+    }
+}
+
 static void theory_backing_label(char out[32])
 {
     uint32_t root = theory_ui.bass;
@@ -437,7 +537,9 @@ static void theory_live_bottom(uint32_t held)
     uint32_t roots, lit = theory_scale_leds(&roots);
     cv_begin(240, 120, TH_BG);
     theory_piano_overlay(held, lit, roots, theory_backing_keys(), 0);
-    if (theory_ui.track) {
+    if (theory_app.primary) {
+        theory_recipe(held);
+    } else if (theory_ui.track) {
         char backing[32];
         theory_backing_label(backing);
         cv_text(12, 56, &AF_S, backing, TH_CHORD);
@@ -447,9 +549,10 @@ static void theory_live_bottom(uint32_t held)
         cv_text(12, 56, &AF_S, "Diatonic triads", TH_MUTED);
         cv_text_r(234, 56, &AF_S, "Dot = tonic", TH_MUTED, TH_BG);
     }
-    theory_degrees();
-    cv_text(12, 105, &AF_S, "K1 Key  K2 Mode  K3 Back", TH_MUTED);
-    cv_text_r(228, 105, &AF_S, "K4 Lab", TH_SCALE, TH_BG);
+    if (!theory_app.primary)
+        theory_degrees();
+    cv_text(12, 105, &AF_S, theory_app.primary ? "K1 Key   K2 Mode" : "K1 Key  K2 Mode  K3 Back", TH_MUTED);
+    cv_text_r(228, 105, &AF_S, theory_app.primary ? "HOME Menu" : "K4 Lab", TH_SCALE, TH_BG);
     cv_blit(0, 120);
 }
 
@@ -496,6 +599,8 @@ static void theory_wheel_half(uint32_t lower)
 }
 
 #include "ui_theory_lab.c"
+#include "ui_theory_guitar.c"
+#include "ui_theory_home.c"
 
 static void theory_draw(void)
 {
@@ -507,12 +612,17 @@ static void theory_draw(void)
     uint32_t backing = theory_ui.backing | (uint32_t)theory_ui.bass << 12 |
                        (uint32_t)theory_ui.track << 16 | (uint32_t)(song.playing != 0) << 20;
     uint8_t mono = ux.mono, light = ux.light;
-    scene |= (uint32_t)theory_lab.page << 12;
+    scene |= (uint32_t)theory_lab.page << 12 | (uint32_t)theory_app.menu << 16 |
+             (uint32_t)theory_app.sounds << 17 | (uint32_t)theory_app.backing << 18 | (uint32_t)theory_app.guitar << 19;
     if (!ui.force && previous == scene && (theory_ui.wheel || (previous_held == held && previous_backing == backing)))
         return;
     ux.mono = ux.light = 0;
     ux.gen++;
-    if (theory_lab.page) {
+    if (theory_app.guitar) {
+        theory_guitar_draw();
+    } else if (theory_app.menu || theory_app.sounds || theory_app.backing) {
+        theory_home_draw();
+    } else if (theory_lab.page) {
         theory_lab_draw(held);
     } else if (theory_ui.wheel) {
         theory_wheel_half(0);

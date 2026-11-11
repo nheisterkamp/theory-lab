@@ -4,15 +4,16 @@
 
 Theory Lab turns the **M-VAVE FM-1** into a hands-on music theory companion.
 Play notes and chords, explore scales and the circle of fifths, follow a backing
-progression, and practice with five interactive lessons.
+progression, practice with five interactive lessons, and explore guitar chord shapes.
 
 Built on [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita and
 Hügelton Instruments, with the original attribution and GPL-3.0-only licence.
 
 ![Theory Lab on the FM-1 display](docs/theory-lab.png)
 
-The firmware, lessons and update package have been checked in the host simulator.
-Physical FM-1 testing is still pending.
+The interface, lessons and guitar voicings are tested against the real firmware
+code in the host simulator. USB installation and startup are also checked on an
+FM-1; the screenshots below come from the host simulator.
 
 The FM-1 is the only supported hardware target. This project does not provide, maintain, or accept requests for ports to other devices or software platforms.
 
@@ -26,34 +27,54 @@ connected until the installer reports Done.
 To build your own package, use the toolchain described in [BUILDING.md](BUILDING.md):
 
 ```sh
-./build.sh --release 1.8.1-theorylab
+./build.sh --release 1.8.1-theorylab2
 ```
 
-The installable package is `build/felucca-1.8.1-theorylab.fwsc`. Follow the local
+The installable package is `build/felucca-1.8.1-theorylab2.fwsc`. Follow the local
 installer instructions in BUILDING.md to load your own package.
 
 The firmware recognizes both the original Puya flash (`0x856014`) and the newer
-UC25HQ80 flash (`0xB36014`). Physical validation of this build is still pending.
+UC25HQ80 flash (`0xB36014`).
 
 ## Theory practice
 
-Hold HOME and tap ARP. Play the keys to see the
-notes, chord or interval, and whether the notes fit the selected mode. Purple
-marks the scale on screen, mint marks played notes in the scale, and orange
-marks played notes outside it. The FM-1 key LEDs also mark the scale and its
-tonic.
+Theory Lab starts directly in **Explore** with a polyphonic practice sound.
+Play to see the note, chord, inversion and each note's function: root, major or
+minor third, fifth and seventh. Single notes show their scale degree and interval
+above the tonic. Mint marks played notes inside the scale, lavender marks scale
+notes, and orange marks played notes outside it. The physical key LEDs guide the
+scale and tonic too.
 
-Turn KNOB 1 to move by fifths and KNOB 2 to change mode while keeping the tonic.
-Tap SCL to switch between the live keyboard and the circle of fifths. OCT− and
-OCT+ change the practice octave. Tap HOME to exit. Practice uses the selected
-polyphonic synth track when available, or the first polyphonic synth track.
+Press **HOME** for the learning menu. Turn SELECT and press PLAY to open an item.
+The menu includes Explore, Play along, the five lessons, Guitar chords, Sounds,
+Advanced and Device settings. HOME always returns to this menu.
 
-For a backing progression, enter chords on a synth track in the sequencer. In
-Theory, turn KNOB 3 to select that track and press PLAY. Blue tips on the screen
-and fully lit key LEDs mark the current backing chord across the keyboard. The
-latest chord stays visible through its gate until the backing track plays new
-notes. Theory prefers a separate polyphonic synth for the practice sound when
-one is available.
+In Explore, KNOB 1 moves through keys by fifths and KNOB 2 changes mode while
+keeping the tonic. SCL toggles the circle of fifths. OCT− and OCT+ change the
+practice octave. PRESETS changes the practice sound; ENV opens Sounds.
+
+**Play along** offers five ready-made chord loops: I–V–vi–IV, ii7–V7–Imaj7,
+i–VI–III–VII, I–IV–V–I and a diatonic cycle. KNOB 1 selects the loop, KNOB 2 sets
+the tempo, and PLAY loads and starts it, one chord per bar. The keyboard remains
+playable, with the backing chord marked on screen and on the physical key LEDs.
+The Chord GPS page opens automatically and shows the next chord, the smoothest
+pitch-class moves and a moving progress bar. Practice uses track 1; the generated
+loop replaces track 2's pattern and sound. Advanced opens Felucca's synth and
+sequencer for custom progressions, effects and projects.
+
+**Sounds** offers Piano, Electric piano, Organ and Soft synth. Choose with PRESETS
+and press PLAY to select and hear a short chord.
+
+**Guitar chords** shows standard E–A–D–G–B–E chord diagrams with fret numbers,
+finger numbers, barre lines, muted/open strings and note names. KNOB 1 chooses
+the root, KNOB 2 chooses major, minor, dominant 7, major 7 or minor 7, and PRESETS
+or SELECT cycles open and movable E/A shapes. PLAY auditions the chord on the
+FM-1. Playing a supported chord on the FM-1 also selects its guitar shape. The
+key LEDs highlight the selected chord tones.
+
+Menu movement animates for 120 ms; backing and riff cursors follow playback.
+These animations run in the UI loop without blocking keyboard input.
+[Preview the menu animation](docs/menu-motion.gif).
 
 Turn KNOB 4 to browse the five lab pages or return to free play:
 
@@ -75,11 +96,11 @@ Turn KNOB 4 to browse the five lab pages or return to free play:
 
 ## Project resources
 
-- [Web installer](https://hugelton.github.io/Felucca/)
+- [Theory Lab web installer](https://nheisterkamp.github.io/theory-lab/webapp/installer/)
 - [Web editor](https://hugelton.github.io/Felucca/webapp/editor/) ([source](https://github.com/hugelton/Felucca-WebApp))
 - [Manual and release notes](https://github.com/hugelton/Felucca/wiki/Home)
 - [Building from source](BUILDING.md)
-- [Issue tracker](https://github.com/hugelton/Felucca/issues)
+- [Theory Lab issues](https://github.com/nheisterkamp/theory-lab/issues)
 
 The firmware uses [Felucca-Engines](https://github.com/hugelton/Felucca-Engines) (MIT) for its built-in sound engines and [felucca-bsp](https://github.com/hugelton/felucca-bsp) (MPL-2.0) for the FM-1 hardware layer. Neither repository implies support for Felucca on other hardware.
 

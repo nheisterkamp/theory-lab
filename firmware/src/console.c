@@ -195,6 +195,10 @@ static void con_status(void)
     con_puts("felucca ");
     con_puts(FELUCCA_VERSION);
     con_puts("\r\n");
+    con_kv("theory_primary", theory_app.primary);
+    con_kv("theory_active", theory_active);
+    con_kv("theory_menu", theory_app.menu);
+    con_kv("theory_guitar", theory_app.guitar);
     con_kv("uptime_ms", (int32_t)fm1_ms);
     con_kv("cpu_pct", (int32_t)(song.cpu_q8 * 100u / 256u));
     con_kv("audio_max_us", (int32_t)felucca_dbg.max_us);

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+#include "ui_theory.c"
 /* Felucca UI drawing: the header, the four knob cards, the footer (steps + engine / preset / page)
  * and the frame; the panel between the cards and the footer is ui_graph.c. The layout:
  * flat SURF cards and panels on BG,
@@ -1375,6 +1376,11 @@ static void splash_band(uint32_t y, uint32_t h, int32_t ly, const char *const *l
 }
 static void draw_splash(void)
 {
+    if (theory_app.primary) {
+        theory_splash();
+        lcd_sync();
+        return;
+    }
     int32_t h = SPL_PAD - AF_M_CAP_Y + SPL_PITCH + AF_M.h;     /* a band: its two lines, the descenders in */
     int32_t lb = h - SPL_PAD - AF_M_CAP_H - AF_M_CAP_Y;         /* the bottom band's last line: its top */
     lcd_fill(0, 0, 240, 240, T_BG);
@@ -1604,8 +1610,6 @@ static void style_apply(void)
         ui.force = 1;
     }
 }
-
-#include "ui_theory.c"
 
 static void ui_draw_page(uint32_t counting);
 static void ui_draw(void)

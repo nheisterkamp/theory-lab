@@ -330,7 +330,7 @@ if [ -f build/gen/felucca_tables.h ]; then
     $CC -w -Ibuild/gen -Ifirmware/src -o "$OUT/ui_test" tests/ui_test.c -lm
     run "UI: sounds keep steps, undo, recording, MIDI overflow, pending saves, panel recovery, drum grid, song chain, GREY gray, MONO neutral" "$OUT/ui_test"
     $CC -w -Ibuild/gen -Ifirmware/src -o "$OUT/theory_test" tests/theory_test.c -lm
-    run "Theory: chord recognition, backing track, and all five lab exercises" "$OUT/theory_test"
+    run "Theory: primary navigation, backing loops, guitar voicings, animations and five lessons" "$OUT/theory_test"
     $CC -w -DFELUCCA_CPU2=0 -Ibuild/gen -Ifirmware/src -o "$OUT/ui_test_c1" tests/ui_test.c -lm
     run "UI, a FELUCCA_CPU2=0 build: MENU > SYSTEM without 2ND CORE, the rest as the default build" "$OUT/ui_test_c1"
     $CC -DPREEMPT -g -fwrapv -fsanitize=address,undefined -fno-sanitize=shift -fno-sanitize-recover=all -w \

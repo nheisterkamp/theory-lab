@@ -582,7 +582,7 @@ static void theory_lab_bottom(uint32_t held)
 static void theory_lab_foot(const char *controls)
 {
     cv_free_text(12, 104, &AF_S, controls, TH_MUTED, TH_BG, 160);
-    cv_text_r(228, 104, &AF_S, "K4 Pages", TH_SCALE, TH_BG);
+    cv_text_r(228, 104, &AF_S, theory_app.primary ? "HOME Menu" : "K4 Pages", TH_SCALE, TH_BG);
     cv_blit(0, 120);
 }
 
@@ -650,13 +650,19 @@ static void theory_gps_draw(uint32_t held)
         }
     } else {
         cv_text(12, 51, &AF_M, "Follow a progression", TH_TEXT);
-        cv_text(12, 80, &AF_S, "K3 selects a backing track. Press PLAY.", TH_MUTED);
-        cv_text(12, 99, &AF_S, "Add two different chords in SEQ.", TH_MUTED);
+        cv_text(12, 80, &AF_S, theory_app.primary ? "HOME > Play along chooses a loop." :
+                "K3 selects a backing track. Press PLAY.", TH_MUTED);
+        cv_text(12, 99, &AF_S, theory_app.primary ? "Press PLAY there to start it." :
+                "Add two different chords in SEQ.", TH_MUTED);
     }
     cv_blit(0, 0);
     theory_lab_bottom(held);
     cv_text(12, 66, &AF_S, "Blue = keep     Orange = move or add", TH_TEXT);
-    theory_lab_foot("K3 Back   PLAY Start / stop");
+    if (theory_app.primary && song.playing && theory_ui.track) {
+        cv_rect(12, 88, 216, 3, TH_RULE);
+        cv_rect(12, 88, theory_app.progress_px, 3, TH_CHORD);
+    }
+    theory_lab_foot(theory_app.primary ? "PLAY Start / stop" : "K3 Back   PLAY Start / stop");
 }
 
 static void theory_ear_draw(uint32_t held)
@@ -726,6 +732,8 @@ static void theory_riff_draw(uint32_t held)
             int32_t y = 106 - (int32_t)((pitch + 12u - theory_lab.riff.root) % 12u) * 3;
             cv_rect(x, y, w < 2 ? 2 : w, 3, pitch != original ? TH_OUT : color);
         }
+        if (theory_app.primary && theory_lab.riff.playing)
+            cv_line(14 + theory_app.riff_px, 67, 14 + theory_app.riff_px, 111, TH_TEXT);
     }
     cv_blit(0, 0);
     theory_lab_bottom(held);

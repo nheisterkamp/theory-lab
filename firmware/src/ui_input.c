@@ -1,3 +1,5 @@
+static void theory_app_poll(void);
+
 /* SPDX-License-Identifier: GPL-3.0-only
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
 /* Felucca UI input: LEDs, knobs and buttons, SEQ step entry, panel setup. */
@@ -417,9 +419,17 @@ static void ui_leds(void)
     }
     if (theory_active) {
         uint32_t guide, alternate;
+        theory_app_poll();
         theory_backing_poll();
-        theory_lab_poll(theory_keys);
+        if (theory_app.guitar)
+            theory_guitar_poll(theory_keys);
+        else if (!theory_app.menu && !theory_app.sounds && !theory_app.backing)
+            theory_lab_poll(theory_keys);
         theory_lab_guides(&sc, &sr, &guide, &alternate);
+        if (theory_app.guitar) {
+            sc = sr = alternate = 0;
+            guide = theory_keys_for(theory_guitar_mask());
+        }
         sr |= alternate;
         c = fm1_in.notes | guide;
         for (k = 0; k < 27u; k++) {
@@ -1553,13 +1563,258 @@ static uint32_t theory_practice_track(void)
     return NTRK;
 }
 
+/* The primary app uses track 1 for practice and track 2 for its backing loops. */
+static void theory_sound_to(track_t *t, uint32_t sound)
+{
+    undo_depth++;
+    set_engine_of(t, THEORY_SOUNDS[sound].engine);
+    apply_preset_to(t, THEORY_SOUNDS[sound].preset);
+    undo_depth--;
+    fm1_irq_off();
+    t->p[P_MUTE] = 0;
+    t->p[P_VOICE] = V_POLY;
+    t->p[P_AMODE] = 0;
+    t->p[P_CHRD] = CH_OFF;
+    t->p[P_QUANT] = QN_OFF;
+    t->p[P_TRANS] = 0;
+    t->p[P_DIST] = t->p[P_CHOR] = t->p[P_DLY] = t->p[P_REV] = 0;
+    fm1_irq_on();
+}
+
+static void theory_sound_load(uint32_t sound)
+{
+    sound %= TH_SOUNDS;
+    theory_sound_to(&trk[0], sound);
+    theory_track = 0;
+    theory_app.sound = theory_app.sound_cursor = (uint8_t)sound;
+    ui.force = 1;
+}
+
+static void theory_enter(void)
+{
+    kb_mask = perf_mask = kb_lock = 0;
+    ui.ly = ui.layer = ui.lock = 0;
+    ui.pg_down = 0;
+    ui.home_t0 = ui.rec_t0 = ui.save_t0 = 0;
+    ui.menu = ui.confirm = 0;
+    song.grid = 0;
+    song.seq_mode = 0;
+    theory_track = 0;
+    theory_active = 1;
+    ui.force = 1;
+}
+
+static void theory_boot(void)
+{
+    uint32_t i, sound = 0;
+    theory_app.primary = 1;
+    for (i = 0; i < TH_SOUNDS; i++)
+        if (trk[0].eng_req == THEORY_SOUNDS[i].engine && trk[0].preset == THEORY_SOUNDS[i].preset)
+            sound = i;
+    theory_sound_load(sound);
+    theory_enter();
+}
+
+static void theory_app_menu(void)
+{
+    theory_lab_leave();
+    theory_app.audition_at = 0;
+    theory_app.menu = 1;
+    theory_app.sounds = theory_app.backing = theory_app.guitar = 0;
+    theory_app.nav = theory_app.nav_target = (int16_t)(44 + 40 * (theory_app.selected % 4u));
+    theory_app.nav_at = 0;
+    ui.force = 1;
+}
+
+static void theory_backing_notes(void)
+{
+    const uint32_t preset = theory_app.progression;
+    step_t notes[7];
+    uint32_t i, j, mode = theory_ui.mode, root = theory_root();
+    track_t *t = &trk[1];
+    for (i = 0; i < THEORY_PROGRESSIONS[preset].n; i++) {
+        uint32_t degree = THEORY_PROGRESSIONS[preset].degree[i];
+        uint32_t bass = (root + theory_mode_tone(mode, degree)) % 12u;
+        uint32_t mask = theory_stack(root, mode, degree, THEORY_PROGRESSIONS[preset].seventh ? 4u : 3u);
+        uint32_t count = 0;
+        notes[i] = (step_t){.time = ST_NOTE};
+        for (j = 0; j < 12u && count < 4u; j++)
+            if (mask & TH_NOTE((bass + j) % 12u))
+                notes[i].note[count++] = (uint8_t)(48u + bass + j);
+        notes[i].n = (uint8_t)count;
+    }
+    fm1_irq_off();
+    for (i = 0; i < THEORY_PROGRESSIONS[preset].n; i++)
+        t->step[i] = notes[i];
+    t->p[P_SLEN] = THEORY_PROGRESSIONS[preset].n;
+    t->p[P_SDIV] = 7;                                  /* one whole note per chord */
+    t->p[P_SGATE] = 127;
+    fm1_irq_on();
+}
+
+static void theory_backing_load(void)
+{
+    uint32_t root = theory_root();
+    theory_lab_leave();
+    theory_sound_to(&trk[1], 1);
+    trk[1].p[P_LEVEL] = 72;
+    theory_ui.mode = THEORY_PROGRESSIONS[theory_app.progression].minor ? 5 : 0;
+    theory_ui.fifth = (uint8_t)(((root + 12u - THEORY_MODE[theory_ui.mode].offset) * 7u) % 12u);
+    theory_backing_notes();
+    theory_ui.track = 2;
+    theory_ui.backing = 0;
+    theory_app.loaded = 1;
+    theory_app.backing = theory_app.menu = 0;
+    theory_lab.page = TH_GPS;
+    theory_lab.held = theory_keys;
+    transport_req = song.playing ? 3 : 1;
+    ui.force = 1;
+}
+
+static void theory_app_open(void)
+{
+    uint32_t selected = theory_app.selected;
+    theory_app.menu = theory_app.sounds = theory_app.backing = theory_app.guitar = 0;
+    if (selected == TH_APP_ADVANCED || selected == TH_APP_SETTINGS) {
+        theory_lab_leave();
+        theory_app.loaded = 0;
+        theory_active = 0;
+        layer_masks();
+        go_home();
+        ui.menu = selected == TH_APP_SETTINGS;
+    } else if (selected == TH_APP_GUITAR) {
+        theory_lab_leave();
+        theory_app.guitar = 1;
+        theory_guitar.held = 0;
+    } else if (selected == TH_APP_SOUNDS) {
+        theory_lab_leave();
+        theory_app.sounds = 1;
+        theory_app.sound_cursor = theory_app.sound;
+    } else if (selected == TH_APP_BACKING) {
+        theory_lab_leave();
+        theory_app.backing = 1;
+    } else {
+        theory_lab_page((int32_t)THEORY_HOME[selected].lesson - theory_lab.page);
+        theory_ui.wheel = 0;
+    }
+    ui.force = 1;
+}
+
+static void theory_app_poll(void)
+{
+    if (theory_app.audition_at && fm1_ms - theory_app.audition_at >= 700u) {
+        theory_preview_request = 0;
+        theory_app.audition_at = 0;
+    }
+    if (theory_app.menu && theory_app.nav_at) {
+        uint32_t elapsed = fm1_ms - theory_app.nav_at;
+        uint32_t p = elapsed >= 120u ? 256u : elapsed * 256u / 120u;
+        uint32_t eased = p * p * (768u - 2u * p) / 65536u;
+        theory_app.nav = (int16_t)(theory_app.nav_from +
+            (theory_app.nav_target - theory_app.nav_from) * (int32_t)eased / 256);
+        if (elapsed >= 120u)
+            theory_app.nav_at = 0;
+        ui.force = 1;
+    }
+    if (theory_app.primary && theory_lab.page == TH_GPS && song.playing && theory_ui.track) {
+        const track_t *t = &trk[theory_ui.track - 1u];
+        uint32_t period = div_samples((uint32_t)t->p[P_SDIV]);
+        uint32_t position = t->seq_pos < period ? t->seq_pos : period;
+        uint32_t px = period ? position * 216u / period : 0;
+        if (theory_app.progress_px != px) {
+            theory_app.progress_px = (uint16_t)px;
+            ui.force = 1;
+        }
+    }
+    if (theory_app.primary && theory_lab.page == TH_RIFF && theory_lab.riff.playing && theory_lab.riff.duration) {
+        uint32_t elapsed = (fm1_ms - theory_lab.riff.started) % theory_lab.riff.duration;
+        uint32_t px = elapsed * 211u / theory_lab.riff.duration;
+        if (theory_app.riff_px != px) {
+            theory_app.riff_px = (uint16_t)px;
+            ui.force = 1;
+        }
+    }
+}
+
+/* The menus consume their own knobs and buttons. Piano keys stay playable. */
+static int theory_app_input(uint32_t pressed, int32_t key, int32_t mode,
+                             int32_t page, int32_t select, int32_t preset)
+{
+    uint32_t play = 1u << panel.btn[B_PLAY], edit = 1u << panel.btn[B_EDIT];
+    int32_t step;
+    if (theory_app.menu) {
+        step = key + page + select + preset;
+        uint32_t previous = theory_app.selected;
+        theory_app.selected = (uint8_t)((theory_app.selected + step % TH_APP_ITEMS + TH_APP_ITEMS) % TH_APP_ITEMS);
+        if (step) {
+            theory_app.nav_target = (int16_t)(44 + 40 * (theory_app.selected % 4u));
+            theory_app.nav_from = theory_app.nav;
+            theory_app.nav_at = fm1_ms | 1u;
+            if (previous / 4u != theory_app.selected / 4u) {
+                theory_app.nav = theory_app.nav_target;
+                theory_app.nav_at = 0;
+            }
+            ui.force = 1;
+        }
+        if (pressed & (play | edit))
+            theory_app_open();
+        return 1;
+    }
+    if (theory_app.guitar) {
+        theory_guitar_input(pressed, key, mode, preset + select);
+        return 1;
+    }
+    if (theory_app.sounds) {
+        step = key + preset + select;
+        theory_app.sound_cursor = (uint8_t)((theory_app.sound_cursor + step % (int32_t)TH_SOUNDS + TH_SOUNDS) % TH_SOUNDS);
+        if (step)
+            ui.force = 1;
+        if (pressed & (play | edit)) {
+            theory_sound_load(theory_app.sound_cursor);
+            theory_preview_request = theory_preview_pitches(theory_stack(theory_root(), theory_ui.mode, 0, 3), theory_root());
+            theory_app.audition_at = fm1_ms | 1u;
+        }
+        return 1;
+    }
+    if (theory_app.backing) {
+        step = key + preset + select;
+        theory_app.progression = (uint8_t)((theory_app.progression + step % (int32_t)TH_PROGRESSIONS + TH_PROGRESSIONS) % TH_PROGRESSIONS);
+        song.g[G_BPM] = (int16_t)clamp(song.g[G_BPM] + mode, GP[G_BPM].min, GP[G_BPM].max);
+        if (step || mode)
+            ui.force = 1;
+        if (pressed & (play | edit))
+            theory_backing_load();
+        return 1;
+    }
+    if (pressed & (1u << panel.btn[B_ENV])) {
+        theory_app.selected = TH_APP_SOUNDS;
+        theory_app_open();
+        return 1;
+    }
+    if (pressed & (1u << panel.btn[B_ARP])) {
+        theory_app.selected = TH_APP_BACKING;
+        theory_app_open();
+        return 1;
+    }
+    if (preset) {
+        uint32_t sound = (uint32_t)((theory_app.sound + preset % (int32_t)TH_SOUNDS + TH_SOUNDS) % TH_SOUNDS);
+        theory_sound_load(sound);
+    }
+    return 0;
+}
+
 /* Hold HOME and tap ARP to enter Theory without cycling the Home or ARP pages. */
 static int theory_input(uint32_t pressed)
 {
     uint32_t home = 1u << panel.btn[B_HOME], arp = 1u << panel.btn[B_ARP];
-    int32_t key, mode, backing, page;
+    int32_t key, mode, backing, page, select, preset;
     uint32_t track;
     if (!theory_active) {
+        if (theory_app.primary && (pressed & home) && !ui.uboot) {
+            theory_enter();
+            theory_app_menu();
+            return 1;
+        }
         if (!(pressed & arp) || !(fm1_in.buttons & home) || ui.menu || ui.confirm ||
             ui.ly || ui.layer || ui.uboot || name_on())
             return 0;
@@ -1582,6 +1837,10 @@ static int theory_input(uint32_t pressed)
         return 1;
     }
     if ((pressed & home) || ui.uboot) {
+        if (theory_app.primary && !ui.uboot) {
+            theory_app_menu();
+            return 1;
+        }
         theory_lab_leave();
         theory_active = 0;
         ui.force = 1;
@@ -1592,9 +1851,11 @@ static int theory_input(uint32_t pressed)
     mode = panel_enc(EN_K2);
     backing = panel_enc(EN_K3);
     page = panel_enc(EN_K4);
-    panel_enc(EN_SELECT);
+    select = panel_enc(EN_SELECT);
     panel_enc(EN_ALGO);
-    panel_enc(EN_PRESET);
+    preset = panel_enc(EN_PRESET);
+    if (theory_app.primary && theory_app_input(pressed, key, mode, page, select, preset))
+        return 1;
     if (page)
         theory_lab_page(page);
     pressed &= ~theory_lab_input(pressed, &key, &mode);
@@ -1612,6 +1873,8 @@ static int theory_input(uint32_t pressed)
     theory_ui.fifth = (uint8_t)((theory_ui.fifth + key % 12 + 12) % 12);
     if (mode)
         theory_set_mode(mode);
+    if (theory_app.primary && theory_app.loaded && (key || mode))
+        theory_backing_notes();
     if (pressed & (1u << panel.btn[B_SCL]))
         theory_ui.wheel ^= 1u;
     if (pressed & (1u << panel.btn[B_OCTDN]))

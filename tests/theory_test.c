@@ -193,6 +193,143 @@ static int lab_mission_test(const char *shots)
     return bad;
 }
 
+static int primary_app_test(const char *shots)
+{
+    int bad = 0;
+    memset(&theory_app, 0, sizeof theory_app);
+    memset(&theory_lab, 0, sizeof theory_lab);
+    memset(&theory_ui, 0, sizeof theory_ui);
+    theory_keys = kb_prev = 0;
+    theory_active = 0;
+    theory_octave = 0;
+    ui_power_on();
+    theory_boot();
+    frame();
+    bad += check("Primary firmware boots directly into Explore with a polyphonic piano",
+                 theory_app.primary && theory_active && !theory_app.menu && theory_lab.page == TH_LIVE &&
+                 trk[0].eng_req == ENGI_SAMPLE && trk[0].p[P_VOICE] == V_POLY);
+    theory_splash();
+    bad += screenshot(shots, "11-primary-splash");
+    ui.force = 1;
+    lab_keys(TH_NOTE(7) | TH_NOTE(11) | TH_NOTE(14));
+    bad += screenshot(shots, "12-primary-major-recipe");
+    lab_keys(0);
+    lab_keys(TH_NOTE(7) | TH_NOTE(10) | TH_NOTE(14));
+    bad += screenshot(shots, "13-primary-minor-recipe");
+    lab_keys(0);
+    lab_keys(TH_NOTE(11));
+    bad += screenshot(shots, "21-primary-note-degree");
+    lab_keys(0);
+    press(B_HOME);
+    bad += check("HOME opens the learning menu while staying in Theory Lab",
+                 theory_active && theory_app.menu);
+    bad += screenshot(shots, "14-primary-home");
+    turn(EN_SELECT, TH_APP_BACKING);
+    press(B_PLAY);
+    bad += check("Play along offers progressions directly from HOME",
+                 theory_app.backing && !theory_app.menu);
+    turn(EN_K2, 3);
+    bad += screenshot(shots, "15-primary-backing");
+    press(B_PLAY);
+    lab_audio(64);
+    bad += check("A backing loop loads I-V-vi-IV on its own track, one chord per bar",
+                 theory_app.loaded && theory_ui.track == 2 && trk[1].p[P_SLEN] == 4 &&
+                 trk[1].p[P_SDIV] == 7 && trk[1].step[0].n == 3 && trk[1].step[0].note[0] == 48 &&
+                 theory_lab.page == TH_GPS && song.playing && theory_ui.backing == (TH_NOTE(0) | TH_NOTE(4) | TH_NOTE(7)));
+    lab_audio(div_samples((uint32_t)trk[1].p[P_SDIV]) / 2u);
+    bad += check("The backing progress indicator follows the playing chord",
+                 theory_app.progress_px >= 107 && theory_app.progress_px <= 109);
+    bad += screenshot(shots, "22-primary-playing-gps");
+    turn(EN_K1, 2);
+    bad += check("Changing key transposes the backing progression alongside the scale",
+                 theory_root() == 2 && trk[1].step[0].note[0] == 50);
+    press(B_PLAY);
+    lab_audio(64);
+    press(B_HOME);
+    turn(EN_SELECT, TH_APP_SOUNDS - TH_APP_BACKING);
+    press(B_PLAY);
+    turn(EN_PRESET, 1);
+    press(B_PLAY);
+    lab_audio(64);
+    bad += check("Sound selection loads a clear electric piano and auditions it",
+                 theory_app.sounds && theory_app.sound == 1 && trk[0].eng_req == ENGI_FM6 &&
+                 !trk[0].p[P_DIST] && !trk[0].p[P_CHOR] && theory_preview_request);
+    bad += screenshot(shots, "16-primary-sounds");
+    fm1_ms += 750;
+    lab_audio(64);
+    lab_audio(64);
+    bad += check("The sound audition releases automatically", !theory_preview_request && !theory_preview_playing);
+    press(B_HOME);
+    turn(EN_SELECT, TH_APP_ADVANCED - TH_APP_SOUNDS);
+    press(B_PLAY);
+    bad += check("Advanced opens the synth and sequencer controls", !theory_active && theory_app.primary);
+    press(B_HOME);
+    bad += check("HOME from Advanced returns to the learning menu", theory_active && theory_app.menu);
+    turn(EN_SELECT, TH_APP_SETTINGS - TH_APP_ADVANCED);
+    press(B_PLAY);
+    bad += check("Device settings remain reachable from the learning menu", !theory_active && ui.menu);
+    press(B_HOME);
+    bad += check("HOME returns from device settings", theory_active && theory_app.menu && !ui.menu);
+    turn(EN_SELECT, TH_APP_GUITAR - TH_APP_SETTINGS);
+    press(B_PLAY);
+    bad += check("Guitar chords are available from the learning menu", theory_app.guitar && theory_active);
+    bad += screenshot(shots, "17-guitar-open-c");
+    turn(EN_K1, 5);
+    bad += screenshot(shots, "18-guitar-f-barre");
+    {
+        uint32_t invalid = 0, shapes = 0;
+        int8_t frets[6];
+        uint8_t fingers[6];
+        for (uint32_t root = 0; root < 12u; root++)
+            for (uint32_t quality = 0; quality < 5u; quality++) {
+                theory_guitar.root = (uint8_t)root;
+                theory_guitar.quality = (uint8_t)quality;
+                uint32_t choices = theory_guitar_open() >= 0 ? 3 : 2;
+                for (uint32_t shape = 0; shape < choices; shape++) {
+                    uint32_t played = 0;
+                    theory_guitar.shape = (uint8_t)shape;
+                    theory_guitar_voicing(frets, fingers);
+                    for (uint32_t string = 0; string < 6u; string++) {
+                        if (frets[string] < 0)
+                            continue;
+                        played |= TH_NOTE((THEORY_GUITAR_TUNING[string] + (uint32_t)frets[string]) % 12u);
+                        invalid += frets[string] > 14 || (frets[string] > 0 && (!fingers[string] || fingers[string] > 4));
+                    }
+                    invalid += !played || !(played & TH_NOTE(root)) || (played & ~theory_guitar_mask()) != 0;
+                    shapes++;
+                }
+            }
+        bad += check("All guitar voicings use valid fingers and notes from the named chord", !invalid && shapes > 120);
+    }
+    theory_guitar.root = theory_guitar.quality = theory_guitar.shape = 0;
+    lab_keys(TH_NOTE(7) | TH_NOTE(11) | TH_NOTE(14) | TH_NOTE(17));
+    bad += check("Playing C7 selects the matching guitar chord", theory_guitar.root == 0 && theory_guitar.quality == 2);
+    bad += screenshot(shots, "19-guitar-played-c7");
+    lab_keys(0);
+    press(B_PLAY);
+    lab_audio(64);
+    bad += check("Guitar chords can be auditioned", theory_preview_playing != 0);
+    fm1_ms += 750;
+    lab_audio(64);
+    lab_audio(64);
+    bad += check("Guitar chord audition releases", !theory_preview_playing);
+    press(B_HOME);
+    turn(EN_SELECT, -1);
+    ui_leds();
+    frame();
+    bad += check("The menu cursor animates towards its new selection",
+                 theory_app.nav > theory_app.nav_target && theory_app.nav_at);
+    for (uint32_t i = 0; i < 8u; i++) {
+        char name[32] = "20-menu-motion-";
+        fmt_int(name + str_len(name), (int32_t)i);
+        lab_audio(0);
+        bad += screenshot(shots, name);
+    }
+    bad += check("The menu animation settles without blocking input",
+                 !theory_app.nav_at && theory_app.nav == theory_app.nav_target);
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     int bad = 0;
@@ -313,5 +450,6 @@ int main(int argc, char **argv)
     bad += lab_riff_test(shots);
     bad += lab_passport_test(shots);
     bad += lab_mission_test(shots);
+    bad += primary_app_test(shots);
     return bad != 0;
 }
