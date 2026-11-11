@@ -18,7 +18,12 @@ The FM-1 is the only supported hardware target. This project does not provide, m
 
 ## Install
 
-Build Theory Lab with the toolchain described in [BUILDING.md](BUILDING.md):
+Open the [Theory Lab web installer](https://nheisterkamp.github.io/theory-lab/webapp/installer/)
+in Chrome or Edge. Connect the powered-on FM-1 directly with a USB data cable,
+close other MIDI apps, click Install and allow MIDI/SysEx access. Keep the cable
+connected until the installer reports Done.
+
+To build your own package, use the toolchain described in [BUILDING.md](BUILDING.md):
 
 ```sh
 ./build.sh --release 1.8.1-theorylab
